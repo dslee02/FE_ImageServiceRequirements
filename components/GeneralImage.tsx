@@ -44,17 +44,10 @@ export default function GeneralImage({
 
     const loadImage = async () => {
       try {
-        // contentId가 URL 형태인지 확인
-        let imageUrl: string;
-        if (contentId.startsWith("/") || contentId.startsWith("http")) {
-          // 직접 URL인 경우 그대로 사용
-          imageUrl = contentId;
-        } else {
-          // public 폴더의 정적 파일로 처리
-          imageUrl = `${
-            contentId.includes(".") ? contentId : contentId + ".jpeg"
-          }`;
-        }
+        // 이미지 URL 생성
+        const imageUrl = contentId.startsWith("/") || contentId.startsWith("http") 
+          ? contentId 
+          : `${baseUrl}${contentId}`;
 
         // 이미 같은 URL을 로드 중이면 건너뛰기
         if (imageSrc && imageSrc.includes(imageUrl)) {

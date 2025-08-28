@@ -14,34 +14,31 @@ export async function renderToCanvas(
   const primaryMime = format === "aeia" ? "image/avif" : "image/webp";
   const fallbackMime = format === "aeia" ? "image/webp" : "image/avif";
 
-  // 먼저 데이터가 유효한 이미지 형식인지 확인
+  // 지원하는 이미지 형식 확인 (WebP, AVIF만 지원)
   const hasRiffHeader = fullBytes[0] === 0x52 && fullBytes[1] === 0x49 && fullBytes[2] === 0x46 && fullBytes[3] === 0x46;
   const hasWebpHeader = hasRiffHeader && fullBytes[8] === 0x57 && fullBytes[9] === 0x45 && fullBytes[10] === 0x42 && fullBytes[11] === 0x50;
-  console.log(`RIFF 헤더 확인: ${hasRiffHeader}, WEBP 헤더 확인: ${hasWebpHeader}`);
+  const hasAvifHeader = fullBytes.slice(4, 8).every((byte, i) => byte === [0x66, 0x74, 0x79, 0x70][i]); // ftyp
+  const hasJpegHeader = fullBytes[0] === 0xFF && fullBytes[1] === 0xD8 && fullBytes[2] === 0xFF;
   
-  if (!hasRiffHeader || !hasWebpHeader) {
-    // 이미지 형식이 아니면 텍스트로 표시
-    console.log('⚠️ 유효한 WebP 형식이 아님. 텍스트 모드로 전환');
+  console.log(`이미지 형식 확인: RIFF=${hasRiffHeader}, WebP=${hasWebpHeader}, AVIF=${hasAvifHeader}, JPEG=${hasJpegHeader}`);
+  
+  // JPEG 등 지원하지 않는 형식 체크
+  if (hasJpegHeader) {
+    console.log('❌ JPEG 형식은 지원하지 않습니다. WebP/AVIF만 지원합니다.');
+    renderUnsupportedFormatCanvas(canvas, 'JPEG');
+    return;
+  }
+  
+  if (!hasRiffHeader || (!hasWebpHeader && !hasAvifHeader)) {
+    // 지원하는 이미지 형식이 아니면 텍스트로 표시
+    console.log('⚠️ 지원하지 않는 이미지 형식. WebP/AVIF만 지원됩니다.');
     renderTextToCanvas(canvas, fullBytes);
     return;
   }
   
-  // RIFF 파일 크기 읽기 (리틀 엔디안)
-  const riffSizeField = (fullBytes[4] | (fullBytes[5] << 8) | (fullBytes[6] << 16) | (fullBytes[7] << 24));
-  const totalRiffSize = riffSizeField + 8; // RIFF 헤더 8바이트 포함
-  console.log(`RIFF 크기 필드: ${riffSizeField}, 전체 RIFF 크기: ${totalRiffSize} bytes, 전체 데이터: ${fullBytes.length} bytes`);
-  
-  // VP8 청크 크기도 확인
-  let actualWebpSize = totalRiffSize;
-  if (fullBytes[12] === 0x56 && fullBytes[13] === 0x50 && fullBytes[14] === 0x38 && fullBytes[15] === 0x20) {
-    const vp8Size = (fullBytes[16] | (fullBytes[17] << 8) | (fullBytes[18] << 16) | (fullBytes[19] << 24));
-    actualWebpSize = 8 + 4 + 4 + vp8Size; // RIFF(8) + WEBP(4) + VP8 헤더(4) + VP8 데이터
-    console.log(`VP8 데이터 크기: ${vp8Size}, 계산된 실제 WebP 크기: ${actualWebpSize} bytes`);
-  }
-  
-  // 실제 WebP 이미지 부분만 추출
-  const webpData = fullBytes.slice(0, Math.min(actualWebpSize, fullBytes.length));
-  console.log(`추출된 WebP 데이터 크기: ${webpData.length} bytes`);
+  // 복호화에서 이미 정확한 크기로 전달되므로 전체 데이터 사용
+  console.log(`받은 이미지 데이터 크기: ${fullBytes.length} bytes`);
+  const webpData = fullBytes;
 
   let bitmap: ImageBitmap | null = null;
 
@@ -261,6 +258,62 @@ export function renderSuccessCanvas(canvas: HTMLCanvasElement, fullBytes: Uint8A
   ctx.fillText('💡 아래에서 Blob URL로 변환된 이미지도 확인하세요!', canvas.width / 2, 310);
   
   console.log('✅ renderSuccessCanvas 렌더링 완료');
+}
+
+/**
+ * 지원하지 않는 이미지 형식에 대한 오류 메시지 렌더링
+ */
+function renderUnsupportedFormatCanvas(canvas: HTMLCanvasElement, format: string): void {
+  canvas.width = 500;
+  canvas.height = 400;
+  
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  
+  // 배경
+  ctx.fillStyle = '#fff5f5';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  // 테두리
+  ctx.strokeStyle = '#e53e3e';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
+  
+  // 제목
+  ctx.fillStyle = '#e53e3e';
+  ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('❌ 지원하지 않는 이미지 형식', canvas.width / 2, 80);
+  
+  // 부제목
+  ctx.fillStyle = '#c53030';
+  ctx.font = 'bold 18px system-ui, -apple-system, sans-serif';
+  ctx.fillText(`${format} 형식은 지원되지 않습니다`, canvas.width / 2, 120);
+  
+  // 지원 형식 안내
+  ctx.fillStyle = '#2d3748';
+  ctx.font = '16px system-ui, -apple-system, sans-serif';
+  ctx.fillText('지원하는 형식:', canvas.width / 2, 170);
+  
+  ctx.fillStyle = '#38a169';
+  ctx.font = 'bold 18px system-ui, -apple-system, sans-serif';
+  ctx.fillText('✅ WebP (.webp)', canvas.width / 2, 200);
+  ctx.fillText('✅ AVIF (.avif)', canvas.width / 2, 230);
+  
+  // 안내 메시지
+  ctx.fillStyle = '#4a5568';
+  ctx.font = '14px system-ui, -apple-system, sans-serif';
+  ctx.fillText('WebP 또는 AVIF 형식의 이미지를 사용해주세요.', canvas.width / 2, 280);
+  ctx.fillText('이 서비스는 차세대 이미지 포맷만 지원합니다.', canvas.width / 2, 300);
+  
+  // 기술 정보
+  ctx.fillStyle = '#718096';
+  ctx.font = '12px system-ui, -apple-system, sans-serif';
+  ctx.fillText('• WebP: Google에서 개발한 고효율 이미지 포맷', canvas.width / 2, 340);
+  ctx.fillText('• AVIF: 차세대 이미지 표준 (더 높은 압축률)', canvas.width / 2, 360);
+  
+  console.log(`✅ ${format} 형식 지원 안내 렌더링 완료`);
 }
 
 /**

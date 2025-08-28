@@ -5,9 +5,14 @@ import EncryptedImage from "@/components/EncryptedImage";
 import GeneralImage from "@/components/GeneralImage";
 import { supportsAvif } from "@/lib/image/metadata";
 
-// PoC용 하드코딩된 AES-256 키 (실서비스에서는 절대 금지)
-const DEMO_KEY_HEX =
-  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+// PoC용 하드코딩된 AES-256 키들 (실서비스에서는 절대 금지)
+const DEMO_KEYS: { [key: string]: string } = {
+  "encrypted-file_example_WEBP_50kB.aeiw": "8ee17769082089b4e23f7c6afe8dec72b1a2c297853e43e0c01ace85b6b1d1ca",
+  "encrypted-file_example_WEBP_1500kB.aeiw": "f9d64d37e25c86bbdeb349c80336c77ccff56a76f00da8ceb4473acc6c023bda",
+};
+
+// 기본 키 (fallback)
+const DEFAULT_KEY_HEX = "8ee17769082089b4e23f7c6afe8dec72b1a2c297853e43e0c01ace85b6b1d1ca";
 
 type ImageType = "encrypted" | "general";
 type LoadingState = "idle" | "loading" | "success" | "error";
@@ -44,6 +49,10 @@ export default function Home() {
     null
   );
   const [showUrlInput, setShowUrlInput] = useState<boolean>(false);
+
+  const getKeyForFile = (filename: string): string => {
+    return DEMO_KEYS[filename] || DEFAULT_KEY_HEX;
+  };
 
   const checkAvifSupport = async () => {
     console.log("=== AVIF 지원 테스트 시작 ===");
@@ -90,9 +99,10 @@ export default function Home() {
   useEffect(() => {
     // public 폴더의 이미지 목록 (실제 존재하는 파일만)
     const imageFiles = [
-      "sample.jpeg",
-      "sampleimage_01.jpeg",
-      "encrypted-demo.aeiw",
+      "file_example_WEBP_50kB.webp",
+      "file_example_WEBP_1500kB.webp",
+      "encrypted-file_example_WEBP_50kB.aeiw",
+      "encrypted-file_example_WEBP_1500kB.aeiw",
     ];
 
     const images = imageFiles.map(detectImageType);
@@ -104,12 +114,10 @@ export default function Home() {
     const baseContentId = imageName.split(".")[0];
 
     // 이미 선택된 이미지인 경우 아무것도 하지 않음
-    if (selectedImage === baseContentId && !customUrl) return;
+    if (selectedImage === imageName && !customUrl) return;
 
-    // 암호화 파일인 경우 전체 파일명 사용, 일반 파일은 확장자 제거
-    const isEncryptedFile =
-      imageName.includes(".aeia") || imageName.includes(".aeiw");
-    const contentId = isEncryptedFile ? imageName : baseContentId;
+    // 모든 파일에 대해 전체 파일명 사용
+    const contentId = imageName;
 
     setSelectedImage(contentId);
     setCustomUrl("");
@@ -207,7 +215,7 @@ export default function Home() {
                 <div
                   key={image.name}
                   className={`flex items-center justify-between p-3 border rounded-lg transition-all duration-200 ${
-                    selectedImage === image.name.split(".")[0]
+                    selectedImage === image.name
                       ? "border-blue-500 bg-blue-50"
                       : "border-gray-300 hover:border-gray-400 hover:bg-gray-50"
                   }`}
@@ -241,12 +249,12 @@ export default function Home() {
                   <button
                     onClick={() => handleImageSelect(image.name)}
                     className={`px-3 py-1.5 rounded text-xs font-medium transition-colors flex-shrink-0 ${
-                      selectedImage === image.name.split(".")[0]
+                      selectedImage === image.name
                         ? "bg-blue-100 text-blue-700"
                         : "bg-gray-100 text-gray-600 hover:bg-blue-100 hover:text-blue-700"
                     }`}
                   >
-                    {selectedImage === image.name.split(".")[0]
+                    {selectedImage === image.name
                       ? "선택됨"
                       : "로드"}
                   </button>
@@ -363,7 +371,7 @@ export default function Home() {
               <EncryptedImage
                 contentId={customUrl || selectedImage}
                 baseUrl={customUrl ? "" : "/"}
-                aesKey={DEMO_KEY_HEX}
+                aesKey={getKeyForFile(customUrl || selectedImage)}
                 className="w-full h-full"
                 alt="암호화된 이미지"
                 onLoad={handleImageLoad}

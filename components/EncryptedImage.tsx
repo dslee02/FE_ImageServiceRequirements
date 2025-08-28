@@ -45,7 +45,7 @@ export default function EncryptedImage({
         setError("");
 
         // Demo: 암호화 이미지가 없는 경우 플레이스홀더 표시
-        if (contentId === "sample") {
+        if (contentId === "sample" || contentId === "placeholder") {
           // Canvas에 플레이스홀더 텍스트 렌더링
           const canvas = canvasRef.current;
           if (canvas) {
