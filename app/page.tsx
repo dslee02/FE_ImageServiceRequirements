@@ -11,6 +11,10 @@ const DEMO_KEYS: { [key: string]: string } = {
     "8ee17769082089b4e23f7c6afe8dec72b1a2c297853e43e0c01ace85b6b1d1ca",
   "encrypted-file_example_WEBP_1500kB.aeiw":
     "f9d64d37e25c86bbdeb349c80336c77ccff56a76f00da8ceb4473acc6c023bda",
+  "encrypted-file_example_AVIF_178kb.aeia":
+    "f07d207341c30f023aac52b10615b0d03da1d064eb08dcadcf7c3ecbf6b36482",
+  "encrypted-file_example_AVIF_1200kb.aeia":
+    "b13d3fed2332e080368f3ec9c14cb11989005cdac64fc371a68999c9decfde85",
 };
 
 // 기본 키 (fallback)
@@ -100,17 +104,48 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    // public 폴더의 이미지 목록 (실제 존재하는 파일만)
-    const imageFiles = [
-      "file_example_WEBP_50kB.webp",
-      "file_example_WEBP_1500kB.webp",
-      "encrypted-file_example_WEBP_50kB.aeiw",
-      "encrypted-file_example_WEBP_1500kB.aeiw",
-    ];
+    const loadImages = async () => {
+      try {
+        console.log("=== 이미지 파일 목록 로딩 시작 ===");
+        const response = await fetch('/api/images');
+        
+        if (!response.ok) {
+          throw new Error(`API 호출 실패: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log("API 응답:", data);
+        
+        if (data.success && data.files) {
+          const images = data.files.map((file: any) => ({
+            name: file.name,
+            path: file.path,
+            extension: file.extension,
+            isEncrypted: file.isEncrypted,
+            originalExtension: file.originalExtension,
+            sizeKB: file.sizeKB
+          }));
+          
+          console.log("로딩된 이미지 목록:", images);
+          setPublicImages(images);
+        } else {
+          console.error("API 응답 형식 오류:", data);
+        }
+      } catch (error) {
+        console.error("이미지 목록 로딩 실패:", error);
+        // 오류 시 기본 목록 사용
+        const fallbackFiles = [
+          "file_example_WEBP_50kB.webp",
+          "file_example_WEBP_1500kB.webp",
+          "encrypted-file_example_WEBP_50kB.aeiw",
+          "encrypted-file_example_WEBP_1500kB.aeiw",
+        ];
+        const images = fallbackFiles.map(detectImageType);
+        setPublicImages(images);
+      }
+    };
 
-    const images = imageFiles.map(detectImageType);
-    console.log("Setting public images:", images);
-    setPublicImages(images);
+    loadImages();
   }, [detectImageType]);
 
   const handleImageSelect = (imageName: string) => {
@@ -119,9 +154,12 @@ export default function Home() {
     // 이미 선택된 이미지인 경우 아무것도 하지 않음
     if (selectedImage === imageName && !customUrl) return;
 
+    console.log('🔄 이미지 선택 상태 초기화:', imageName);
+
     // 모든 파일에 대해 전체 파일명 사용
     const contentId = imageName;
 
+    // 상태 완전 초기화
     setSelectedImage(contentId);
     setCustomUrl("");
     setShowUrlInput(false);
@@ -133,6 +171,12 @@ export default function Home() {
       setImageType(imageInfo.isEncrypted ? "encrypted" : "general");
       updateImageMetadata(imageInfo);
     }
+    
+    console.log('✅ 상태 초기화 완료:', { 
+      selectedImage: contentId, 
+      imageType: imageInfo?.isEncrypted ? "encrypted" : "general",
+      loadingState: "idle" 
+    });
   };
 
   const handleUrlLoad = () => {
@@ -192,8 +236,35 @@ export default function Home() {
   };
 
   const handleImageError = (error: string) => {
+    console.error('❌ 이미지 로드 에러:', error);
     setLoadingState("error");
     setErrorMessage(error);
+    
+    // 에러 메타데이타 업데이트
+    if (imageMetadata) {
+      setImageMetadata({
+        ...imageMetadata,
+        decryptionStatus: "에러 발생",
+        cacheUsed: false,
+        loadTime: 0,
+      });
+    }
+  };
+
+  const clearCache = async () => {
+    try {
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(
+          cacheNames.map(cacheName => caches.delete(cacheName))
+        );
+        console.log('✅ 모든 캐시 삭제 완료');
+        alert('캐시가 삭제되었습니다. 페이지를 새로고침하세요.');
+      }
+    } catch (error) {
+      console.error('❌ 캐시 삭제 실패:', error);
+      alert('캐시 삭제에 실패했습니다.');
+    }
   };
 
   return (
@@ -296,13 +367,26 @@ export default function Home() {
               <button
                 onClick={checkAvifSupport}
                 className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors"
-                style={{ marginRight: "16px" }}
+                style={{ marginRight: "8px" }}
               >
                 AVIF 지원 확인
               </button>
+              
+              <button
+                onClick={clearCache}
+                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+                style={{ marginRight: "16px" }}
+              >
+                캐시 삭제
+              </button>
 
               <button
-                onClick={() => setImageType("encrypted")}
+                onClick={() => {
+                  console.log('🔄 수동 암호화 모드 전환');
+                  setImageType("encrypted");
+                  setLoadingState("idle");
+                  setErrorMessage("");
+                }}
                 className={`px-4 py-2 rounded-md transition-colors ${
                   imageType === "encrypted"
                     ? "bg-blue-600 text-white"
@@ -312,7 +396,12 @@ export default function Home() {
                 암호화된 이미지
               </button>
               <button
-                onClick={() => setImageType("general")}
+                onClick={() => {
+                  console.log('🔄 수동 일반 모드 전환');
+                  setImageType("general");
+                  setLoadingState("idle");
+                  setErrorMessage("");
+                }}
                 className={`px-4 py-2 rounded-md transition-colors ${
                   imageType === "general"
                     ? "bg-blue-600 text-white"

@@ -29,15 +29,15 @@ export async function renderToCanvas(
     return;
   }
   
-  if (!hasRiffHeader || (!hasWebpHeader && !hasAvifHeader)) {
+  if (!hasWebpHeader && !hasAvifHeader) {
     // 지원하는 이미지 형식이 아니면 텍스트로 표시
     console.log('⚠️ 지원하지 않는 이미지 형식. WebP/AVIF만 지원됩니다.');
     renderTextToCanvas(canvas, fullBytes);
     return;
   }
   
-  // WebP 데이터 크기 검증 및 추출
-  let webpData: Uint8Array;
+  // 이미지 데이터 크기 검증 및 추출
+  let imageData: Uint8Array;
   
   if (hasWebpHeader) {
     // RIFF 크기 필드에서 실제 WebP 크기 계산
@@ -46,71 +46,60 @@ export async function renderToCanvas(
     
     // 실제 WebP 파일 크기만큼만 추출
     if (riffSize <= fullBytes.length) {
-      webpData = fullBytes.slice(0, riffSize);
-      console.log(`추출된 WebP 데이터 크기: ${webpData.length} bytes`);
+      imageData = fullBytes.slice(0, riffSize);
+      console.log(`추출된 WebP 데이터 크기: ${imageData.length} bytes`);
     } else {
       console.warn(`RIFF 크기(${riffSize})가 전체 데이터(${fullBytes.length})보다 큼, 전체 데이터 사용`);
-      webpData = fullBytes;
+      imageData = fullBytes;
     }
+  } else if (hasAvifHeader) {
+    // AVIF는 전체 데이터 사용
+    imageData = fullBytes;
+    console.log(`AVIF 데이터 크기: ${imageData.length} bytes`);
   } else {
-    webpData = fullBytes;
+    imageData = fullBytes;
   }
 
   let bitmap: ImageBitmap | null = null;
 
   try {
-    bitmap = await createImageBitmapWithFallback(webpData, format);
+    bitmap = await createImageBitmapWithFallback(imageData, format);
     console.log(`✅ 이미지 디코딩 성공`);
   } catch (primaryError) {
-    console.warn(`createImageBitmapWithFallback 실패, Image 객체로 재시도:`, primaryError);
+    console.warn(`createImageBitmapWithFallback 실패, 고급 fallback 처리 시작:`, primaryError);
     
     try {
-      // Image 객체를 사용한 fallback 방식
-      const imageObj = new Image();
-      const canvas2d = document.createElement('canvas');
-      const ctx2d = canvas2d.getContext('2d');
+      // Fallback 1: Image 객체를 사용한 Base64 방식
+      bitmap = await tryImageObjectFallback(imageData, primaryMime);
+      console.log('✅ Image 객체 + Base64 방식 성공!');
+    } catch (imageObjectError) {
+      console.warn('Image 객체 방식 실패, Blob URL 방식 시도:', imageObjectError);
       
-      if (!ctx2d) {
-        throw new Error('Canvas 2D context 생성 실패');
+      try {
+        // Fallback 2: Blob URL 방식
+        bitmap = await tryBlobUrlFallback(imageData, primaryMime, fallbackMime);
+        console.log('✅ Blob URL 방식 성공!');
+      } catch (blobUrlError) {
+        console.warn('Blob URL 방식 실패, 데이터 정리 후 재시도:', blobUrlError);
+        
+        try {
+          // Fallback 3: 데이터 정리 후 재시도
+          bitmap = await tryCleanDataFallback(imageData, format);
+          console.log('✅ 데이터 정리 후 재시도 성공!');
+        } catch (cleanDataError) {
+          console.error('모든 이미지 디코딩 방식 실패, 성공 상태로 표시');
+          console.log('디코딩 실패 상세:', { 
+            primaryError, 
+            imageObjectError, 
+            blobUrlError, 
+            cleanDataError 
+          });
+          
+          // 복호화는 성공했지만 이미지 렌더링 실패
+          renderDecryptionSuccessButRenderFailed(canvas, fullBytes, format);
+          return;
+        }
       }
-      
-      // Base64 변환로 시도
-      const base64 = btoa(String.fromCharCode(...webpData));
-      const dataUrl = `data:${primaryMime};base64,${base64}`;
-      
-      console.log('🔄 Image 객체 + Base64 방식으로 재시도...');
-      
-      await new Promise<void>((resolve, reject) => {
-        imageObj.onload = () => {
-          try {
-            canvas2d.width = imageObj.naturalWidth;
-            canvas2d.height = imageObj.naturalHeight;
-            ctx2d.drawImage(imageObj, 0, 0);
-            
-            // 임시 Canvas에서 ImageBitmap 생성
-            createImageBitmap(canvas2d).then(bmp => {
-              bitmap = bmp;
-              console.log('✅ Image 객체 방식 성공!');
-              resolve();
-            }).catch(reject);
-          } catch (drawError) {
-            reject(drawError);
-          }
-        };
-        imageObj.onerror = reject;
-        imageObj.src = dataUrl;
-      });
-      
-      if (!bitmap) {
-        throw new Error('Image 객체 방식 실패');
-      }
-    } catch (fallbackError) {
-      console.error('모든 이미지 디코딩 방식 실패, 텍스트 모드로 전환');
-      console.log('디코딩 실패 상세:', { primaryError, fallbackError });
-      
-      // 텍스트 모드에서 성공 표시 (복호화 성공이지만 이미지 디코딩 실패)
-      renderSuccessCanvas(canvas, fullBytes);
-      return;
     }
   }
 
@@ -206,6 +195,238 @@ function renderTextToCanvas(canvas: HTMLCanvasElement, fullBytes: Uint8Array) {
   });
   
   console.log('✅ 텍스트 모드 렌더링 완료');
+}
+
+/**
+ * Image 객체를 사용한 fallback 처리
+ */
+async function tryImageObjectFallback(imageData: Uint8Array, mimeType: string): Promise<ImageBitmap> {
+  return new Promise((resolve, reject) => {
+    try {
+      const imageObj = new Image();
+      const canvas2d = document.createElement('canvas');
+      const ctx2d = canvas2d.getContext('2d');
+      
+      if (!ctx2d) {
+        reject(new Error('Canvas 2D context 생성 실패'));
+        return;
+      }
+      
+      // Base64 변환 (더 안전한 방식)
+      const base64 = btoa(Array.from(imageData, byte => String.fromCharCode(byte)).join(''));
+      const dataUrl = `data:${mimeType};base64,${base64}`;
+      
+      console.log(`🔄 Image 객체 + Base64 방식 시도 (MIME: ${mimeType})`);
+      
+      const timeout = setTimeout(() => {
+        reject(new Error('Image 로드 타임아웃'));
+      }, 10000); // 10초 타임아웃
+      
+      imageObj.onload = () => {
+        clearTimeout(timeout);
+        try {
+          if (imageObj.naturalWidth === 0 || imageObj.naturalHeight === 0) {
+            reject(new Error('이미지 크기가 0'));
+            return;
+          }
+          
+          canvas2d.width = imageObj.naturalWidth;
+          canvas2d.height = imageObj.naturalHeight;
+          ctx2d.drawImage(imageObj, 0, 0);
+          
+          // 임시 Canvas에서 ImageBitmap 생성
+          createImageBitmap(canvas2d).then(resolve).catch(reject);
+        } catch (drawError) {
+          reject(drawError);
+        }
+      };
+      
+      imageObj.onerror = (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      };
+      
+      imageObj.src = dataUrl;
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+/**
+ * Blob URL을 사용한 fallback 처리
+ */
+async function tryBlobUrlFallback(imageData: Uint8Array, primaryMime: string, fallbackMime: string): Promise<ImageBitmap> {
+  const mimes = [primaryMime, fallbackMime, 'image/*'];
+  
+  for (const mime of mimes) {
+    try {
+      console.log(`🔄 Blob URL 방식 시도 (MIME: ${mime})`);
+      
+      const blob = new Blob([imageData], { type: mime });
+      const url = URL.createObjectURL(blob);
+      
+      try {
+        const imageObj = new Image();
+        const bitmap = await new Promise<ImageBitmap>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Blob URL 이미지 로드 타임아웃'));
+          }, 8000);
+          
+          imageObj.onload = () => {
+            clearTimeout(timeout);
+            if (imageObj.naturalWidth === 0 || imageObj.naturalHeight === 0) {
+              reject(new Error('Blob URL 이미지 크기가 0'));
+              return;
+            }
+            createImageBitmap(imageObj).then(resolve).catch(reject);
+          };
+          
+          imageObj.onerror = (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          };
+          
+          imageObj.src = url;
+        });
+        
+        return bitmap;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      console.warn(`Blob URL 방식 (${mime}) 실패:`, error);
+    }
+  }
+  
+  throw new Error('모든 MIME 타입으로 Blob URL 방식 실패');
+}
+
+/**
+ * 데이터 정리 후 재시도하는 fallback 처리
+ */
+async function tryCleanDataFallback(imageData: Uint8Array, format: "aeia" | "aeiw"): Promise<ImageBitmap> {
+  console.log('🔄 데이터 정리 후 재시도');
+  
+  // 1. 데이터 끝부분의 null 바이트 제거
+  let cleanData = imageData;
+  while (cleanData.length > 0 && cleanData[cleanData.length - 1] === 0) {
+    cleanData = cleanData.slice(0, -1);
+  }
+  
+  if (cleanData.length !== imageData.length) {
+    console.log(`null 바이트 제거: ${imageData.length} -> ${cleanData.length} bytes`);
+  }
+  
+  // 2. WebP 헤더 재검증 및 크기 조정
+  if (format === "aeiw") {
+    const hasRiff = cleanData[0] === 0x52 && cleanData[1] === 0x49 && cleanData[2] === 0x46 && cleanData[3] === 0x46;
+    const hasWebp = hasRiff && cleanData[8] === 0x57 && cleanData[9] === 0x45 && cleanData[10] === 0x42 && cleanData[11] === 0x50;
+    
+    if (hasRiff && hasWebp) {
+      const riffSize = (cleanData[4] | (cleanData[5] << 8) | (cleanData[6] << 16) | (cleanData[7] << 24)) + 8;
+      if (riffSize > 0 && riffSize <= cleanData.length) {
+        cleanData = cleanData.slice(0, riffSize);
+        console.log(`WebP RIFF 크기 재조정: ${cleanData.length} bytes`);
+      }
+    }
+  }
+  
+  // 3. 다시 createImageBitmap 시도
+  const mimeType = format === "aeia" ? "image/avif" : "image/webp";
+  const blob = new Blob([cleanData], { type: mimeType });
+  
+  try {
+    return await createImageBitmap(blob);
+  } catch (error) {
+    console.warn('정리된 데이터로 createImageBitmap 실패:', error);
+    
+    // 4. 마지막으로 Image 객체 방식 재시도
+    return await tryImageObjectFallback(cleanData, mimeType);
+  }
+}
+
+/**
+ * 복호화 성공했지만 이미지 렌더링 실패 시 표시
+ */
+function renderDecryptionSuccessButRenderFailed(canvas: HTMLCanvasElement, fullBytes: Uint8Array, format: "aeia" | "aeiw"): void {
+  canvas.width = 600;
+  canvas.height = 500;
+  
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  
+  // 배경 (경고 색상)
+  ctx.fillStyle = '#fff8e1';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  // 테두리
+  ctx.strokeStyle = '#f57c00';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+  
+  // 제목
+  ctx.fillStyle = '#e65100';
+  ctx.font = 'bold 22px system-ui, -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('⚠️ 복호화 성공, 이미지 렌더링 실패', canvas.width / 2, 60);
+  
+  // 부제목
+  ctx.fillStyle = '#ff8f00';
+  ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
+  ctx.fillText('🔓 AES-GCM 암호화 해독 완료', canvas.width / 2, 100);
+  
+  ctx.fillStyle = '#d84315';
+  ctx.fillText('🖼️ 이미지 디코딩 실패 (모든 fallback 시도함)', canvas.width / 2, 125);
+  
+  // 기술 정보
+  ctx.fillStyle = '#5d4037';
+  ctx.font = '14px system-ui, -apple-system, sans-serif';
+  ctx.fillText(`파일 형식: ${format} (${format === 'aeia' ? 'AVIF' : 'WebP'})`, canvas.width / 2, 160);
+  ctx.fillText(`복호화된 데이터: ${fullBytes.length.toLocaleString()} bytes`, canvas.width / 2, 180);
+  
+  // 시도한 방법들
+  ctx.fillStyle = '#6d4c41';
+  ctx.font = '13px system-ui, -apple-system, sans-serif';
+  ctx.fillText('시도한 렌더링 방법들:', canvas.width / 2, 220);
+  
+  const methods = [
+    '1️⃣ createImageBitmap() 직접 호출',
+    '2️⃣ Image 객체 + Base64 data URL',
+    '3️⃣ Blob URL + Image 객체',
+    '4️⃣ 데이터 정리 후 재시도',
+    '5️⃣ 다중 MIME 타입 시도'
+  ];
+  
+  methods.forEach((method, index) => {
+    ctx.fillStyle = '#795548';
+    ctx.fillText(method, canvas.width / 2, 245 + index * 18);
+  });
+  
+  // 가능한 원인
+  ctx.fillStyle = '#bf360c';
+  ctx.font = 'bold 14px system-ui, -apple-system, sans-serif';
+  ctx.fillText('가능한 원인:', canvas.width / 2, 360);
+  
+  const causes = [
+    '• 브라우저가 해당 이미지 형식을 지원하지 않음',
+    '• 복호화된 이미지 데이터가 손상됨',
+    '• 파일 헤더나 메타데이터 오류'
+  ];
+  
+  causes.forEach((cause, index) => {
+    ctx.fillStyle = '#8d6e63';
+    ctx.font = '12px system-ui, -apple-system, sans-serif';
+    ctx.fillText(cause, canvas.width / 2, 385 + index * 16);
+  });
+  
+  // 성공 표시
+  ctx.fillStyle = '#2e7d32';
+  ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+  ctx.fillText('✅ 하지만 암호화 해독 자체는 성공적으로 완료되었습니다!', canvas.width / 2, 450);
+  
+  console.log('✅ renderDecryptionSuccessButRenderFailed 렌더링 완료');
 }
 
 /**

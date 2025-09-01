@@ -33,11 +33,19 @@ export default function EncryptedImage({
 
   useEffect(() => {
     let mounted = true;
+    let abortController = new AbortController();
     let processingRef = { current: false };
 
     const loadImage = async () => {
-      if (!canvasRef.current || processingRef.current) return;
-
+      if (!canvasRef.current) return;
+      
+      // 이전 처리 중인 작업이 있다면 취소하고 새로 시작
+      if (processingRef.current) {
+        console.log('🔄 이전 작업 취소 후 새 작업 시작');
+        abortController.abort();
+        abortController = new AbortController();
+      }
+      
       processingRef.current = true;
 
       try {
@@ -131,14 +139,22 @@ export default function EncryptedImage({
 
         let blob: Blob | null = null;
 
-        // 캐시에서 먼저 시도
-        if (useCache) {
+        // 캐시에서 먼저 시도 (개발 모드에서는 캐시 무력화)
+        const isDev = process.env.NODE_ENV === 'development';
+        if (useCache && !isDev) {
           blob = await getEncryptedImage(imageUrl);
+          if (blob) {
+            console.log('📦 캐시에서 이미지 로드:', imageUrl);
+          }
+        } else if (isDev) {
+          console.log('🔄 개발 모드: 캐시 무시하고 새로 로드');
         }
 
         // 캐시에 없으면 네트워크에서 가져오기
         if (!blob) {
-          const response = await fetch(imageUrl);
+          const response = await fetch(imageUrl, {
+            signal: abortController.signal
+          });
 
           if (!response.ok) {
             throw new Error(
@@ -148,9 +164,12 @@ export default function EncryptedImage({
 
           blob = await response.blob();
 
-          // 캐시에 저장
-          if (useCache) {
+          // 캐시에 저장 (개발 모드에서는 저장하지 않음)
+          if (useCache && !isDev) {
             await putEncryptedImage(imageUrl, blob);
+            console.log('💾 캐시에 이미지 저장:', imageUrl);
+          } else if (isDev) {
+            console.log('🚫 개발 모드: 캐시에 저장하지 않음');
           }
         }
 
@@ -172,14 +191,21 @@ export default function EncryptedImage({
           }
         }
       } catch (err) {
-        if (mounted) {
-          const errorMessage =
-            err instanceof Error
+        if (mounted && !abortController.signal.aborted) {
+          const errorMessage = err instanceof Error && err.name === 'AbortError' 
+            ? "요청이 취소되었습니다"
+            : err instanceof Error
               ? err.message
               : "암호화된 이미지 로드 중 오류가 발생했습니다.";
+          
+          console.warn('❌ EncryptedImage 로드 실패:', errorMessage);
           setError(errorMessage);
           setLoading(false);
-          onError?.(errorMessage);
+          
+          // AbortError가 아닌 경우만 상위로 에러 전파
+          if (!(err instanceof Error && err.name === 'AbortError')) {
+            onError?.(errorMessage);
+          }
         }
       } finally {
         processingRef.current = false;
@@ -194,8 +220,8 @@ export default function EncryptedImage({
       const arrayBuffer = await blob.arrayBuffer();
       const bytes = new Uint8Array(arrayBuffer);
 
-      // 파일 파싱
-      const parsed = parseAe(bytes);
+      // 파일 파싱 (파일명 전달)
+      const parsed = parseAe(bytes, contentId);
 
       // 헤드 부분 복호화 (1MB)
       const decryptedHead = await decryptHeadAESGCM(
@@ -216,12 +242,17 @@ export default function EncryptedImage({
       await renderToCanvas(canvas, fullImage, parsed.format);
     };
 
-    // 약간의 디바운싱
+    // 약간의 디바운싱과 초기 상태 설정
+    setLoading(true);
+    setError("");
     const timeoutId = setTimeout(loadImage, 100);
 
     return () => {
       mounted = false;
+      abortController.abort();
       clearTimeout(timeoutId);
+      processingRef.current = false;
+      console.log('🧹 EncryptedImage 클린업 완료');
     };
   }, [contentId, baseUrl, aesKey, useCache, onLoad, onError]);
 

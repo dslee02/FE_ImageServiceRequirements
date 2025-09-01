@@ -40,6 +40,7 @@ export default function GeneralImage({
 
   useEffect(() => {
     let mounted = true;
+    let abortController = new AbortController();
     let objectUrl: string | null = null;
 
     const loadImage = async () => {
@@ -49,24 +50,29 @@ export default function GeneralImage({
           ? contentId 
           : `${baseUrl}${contentId}`;
 
-        // 이미 같은 URL을 로드 중이면 건너뛰기
-        if (imageSrc && imageSrc.includes(imageUrl)) {
-          return;
-        }
+        console.log('🖼️ GeneralImage 로드 시작:', imageUrl);
 
         setLoading(true);
         setError("");
 
         let blob: Blob | null = null;
 
-        // 캐시에서 먼저 시도
-        if (useCache) {
+        // 캐시에서 먼저 시도 (개발 모드에서는 캐시 무력화)
+        const isDev = process.env.NODE_ENV === 'development';
+        if (useCache && !isDev) {
           blob = await getEncryptedImage(imageUrl);
+          if (blob) {
+            console.log('📦 GeneralImage 캐시에서 로드:', imageUrl);
+          }
+        } else if (isDev) {
+          console.log('🔄 GeneralImage 개발 모드: 캐시 무시');
         }
 
         // 캐시에 없으면 네트워크에서 가져오기
         if (!blob) {
-          const response = await fetch(imageUrl);
+          const response = await fetch(imageUrl, {
+            signal: abortController.signal
+          });
 
           if (!response.ok) {
             throw new Error(
@@ -76,9 +82,12 @@ export default function GeneralImage({
 
           blob = await response.blob();
 
-          // 캐시에 저장
-          if (useCache && blob) {
+          // 캐시에 저장 (개발 모드에서는 저장하지 않음)
+          if (useCache && blob && !isDev) {
             await putEncryptedImage(imageUrl, blob);
+            console.log('💾 GeneralImage 캐시에 저장:', imageUrl);
+          } else if (isDev) {
+            console.log('🚫 GeneralImage 개발 모드: 캐시 저장 생략');
           }
         }
 
@@ -94,14 +103,21 @@ export default function GeneralImage({
         setImageSrc(objectUrl);
         setLoading(false);
       } catch (err) {
-        if (mounted) {
-          const errorMessage =
-            err instanceof Error
+        if (mounted && !abortController.signal.aborted) {
+          const errorMessage = err instanceof Error && err.name === 'AbortError'
+            ? "요청이 취소되었습니다"
+            : err instanceof Error
               ? err.message
               : "이미지 로드 중 오류가 발생했습니다.";
+          
+          console.warn('❌ GeneralImage 로드 실패:', errorMessage);
           setError(errorMessage);
           setLoading(false);
-          onError?.(errorMessage);
+          
+          // AbortError가 아닌 경우만 상위로 에러 전파
+          if (!(err instanceof Error && err.name === 'AbortError')) {
+            onError?.(errorMessage);
+          }
         }
       }
     };
@@ -115,14 +131,21 @@ export default function GeneralImage({
       }
     };
 
+    // 초기 상태 설정
+    setLoading(true);
+    setError("");
+    setImageSrc("");
+    
     checkAvif();
     loadImage();
 
     return () => {
       mounted = false;
+      abortController.abort();
       if (objectUrl) {
         URL.revokeObjectURL(objectUrl);
       }
+      console.log('🧹 GeneralImage 클린업 완료');
     };
   }, [contentId, baseUrl, useCache, onError]);
 
