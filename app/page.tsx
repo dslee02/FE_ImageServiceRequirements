@@ -7,12 +7,15 @@ import { supportsAvif } from "@/lib/image/metadata";
 
 // PoC용 하드코딩된 AES-256 키들 (실서비스에서는 절대 금지)
 const DEMO_KEYS: { [key: string]: string } = {
-  "encrypted-file_example_WEBP_50kB.aeiw": "8ee17769082089b4e23f7c6afe8dec72b1a2c297853e43e0c01ace85b6b1d1ca",
-  "encrypted-file_example_WEBP_1500kB.aeiw": "f9d64d37e25c86bbdeb349c80336c77ccff56a76f00da8ceb4473acc6c023bda",
+  "encrypted-file_example_WEBP_50kB.aeiw":
+    "8ee17769082089b4e23f7c6afe8dec72b1a2c297853e43e0c01ace85b6b1d1ca",
+  "encrypted-file_example_WEBP_1500kB.aeiw":
+    "f9d64d37e25c86bbdeb349c80336c77ccff56a76f00da8ceb4473acc6c023bda",
 };
 
 // 기본 키 (fallback)
-const DEFAULT_KEY_HEX = "8ee17769082089b4e23f7c6afe8dec72b1a2c297853e43e0c01ace85b6b1d1ca";
+const DEFAULT_KEY_HEX =
+  "8ee17769082089b4e23f7c6afe8dec72b1a2c297853e43e0c01ace85b6b1d1ca";
 
 type ImageType = "encrypted" | "general";
 type LoadingState = "idle" | "loading" | "success" | "error";
@@ -221,21 +224,10 @@ export default function Home() {
                   }`}
                 >
                   <div className="flex items-center space-x-3 flex-1">
-                    <div
-                      className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-                        image.isEncrypted ? "bg-red-500" : "bg-green-500"
-                      }`}
-                    ></div>
-                    <button
-                      onClick={() => handleImageSelect(image.name)}
-                      className="font-medium text-blue-600 hover:text-blue-800 hover:underline text-left flex-shrink-0"
-                    >
-                      {image.name}
-                    </button>
                     <span className="text-sm text-gray-500 flex-1">
                       {image.isEncrypted
                         ? "🔒 AES-GCM-256 암호화"
-                        : "🔓 일반 이미지"}
+                        : "일반 이미지"}
                       <span className="ml-2 px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">
                         {image.extension.toUpperCase()}
                       </span>
@@ -245,19 +237,29 @@ export default function Home() {
                         </span>
                       )}
                     </span>
+                    <div
+                      className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                        image.isEncrypted ? "bg-red-500" : "bg-green-500"
+                      }`}
+                    ></div>
+                    <button
+                      onClick={() => handleImageSelect(image.name)}
+                      className={`px-3 py-1.5 rounded text-xs font-medium transition-colors flex-shrink-0 ${
+                        selectedImage === image.name
+                          ? "bg-blue-100 text-blue-700"
+                          : "bg-gray-100 text-gray-600 hover:bg-blue-100 hover:text-blue-700"
+                      }`}
+                    >
+                      {selectedImage === image.name ? "선택됨" : "로드"}
+                    </button>
+                    <button
+                      onClick={() => handleImageSelect(image.name)}
+                      className="font-medium text-blue-600 hover:text-blue-800 hover:underline text-left flex-shrink-0"
+                    >
+                      {image.name}
+                    </button>
                   </div>
-                  <button
-                    onClick={() => handleImageSelect(image.name)}
-                    className={`px-3 py-1.5 rounded text-xs font-medium transition-colors flex-shrink-0 ${
-                      selectedImage === image.name
-                        ? "bg-blue-100 text-blue-700"
-                        : "bg-gray-100 text-gray-600 hover:bg-blue-100 hover:text-blue-700"
-                    }`}
-                  >
-                    {selectedImage === image.name
-                      ? "선택됨"
-                      : "로드"}
-                  </button>
+                  <br />
                 </div>
               ))}
             </div>
@@ -284,28 +286,21 @@ export default function Home() {
               로드
             </button>
           </div>
-          <div className="text-sm text-gray-600 mb-4">
-            <p className="mb-2">
-              <strong>테스트 예시:</strong>
-            </p>
-            <div className="space-y-1">
-              <p>
-                • 일반 이미지:{" "}
-                <code className="bg-gray-100 px-1 rounded">sample.jpeg</code>
-              </p>
-              <p>
-                • 암호화 이미지:{" "}
-                <code className="bg-gray-100 px-1 rounded">test.aeia</code> 또는{" "}
-                <code className="bg-gray-100 px-1 rounded">test.aeiw</code>
-              </p>
-            </div>
-          </div>
         </div>
+        <br />
 
         {/* 이미지 표시 */}
         <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
           <div className="flex flex-wrap gap-4 mb-6">
             <div className="flex gap-2">
+              <button
+                onClick={checkAvifSupport}
+                className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors"
+                style={{ marginRight: "16px" }}
+              >
+                AVIF 지원 확인
+              </button>
+
               <button
                 onClick={() => setImageType("encrypted")}
                 className={`px-4 py-2 rounded-md transition-colors ${
@@ -327,14 +322,8 @@ export default function Home() {
                 일반 이미지
               </button>
             </div>
-
-            <button
-              onClick={checkAvifSupport}
-              className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors"
-            >
-              AVIF 지원 확인
-            </button>
           </div>
+          <br />
 
           {avifSupported !== null && (
             <div

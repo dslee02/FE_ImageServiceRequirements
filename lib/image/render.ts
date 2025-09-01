@@ -36,22 +36,33 @@ export async function renderToCanvas(
     return;
   }
   
-  // 복호화에서 이미 정확한 크기로 전달되므로 전체 데이터 사용
-  console.log(`받은 이미지 데이터 크기: ${fullBytes.length} bytes`);
-  const webpData = fullBytes;
+  // WebP 데이터 크기 검증 및 추출
+  let webpData: Uint8Array;
+  
+  if (hasWebpHeader) {
+    // RIFF 크기 필드에서 실제 WebP 크기 계산
+    const riffSize = (fullBytes[4] | (fullBytes[5] << 8) | (fullBytes[6] << 16) | (fullBytes[7] << 24)) + 8;
+    console.log(`RIFF 크기 필드: ${riffSize - 8}, 전체 RIFF 크기: ${riffSize} bytes, 전체 데이터: ${fullBytes.length} bytes`);
+    
+    // 실제 WebP 파일 크기만큼만 추출
+    if (riffSize <= fullBytes.length) {
+      webpData = fullBytes.slice(0, riffSize);
+      console.log(`추출된 WebP 데이터 크기: ${webpData.length} bytes`);
+    } else {
+      console.warn(`RIFF 크기(${riffSize})가 전체 데이터(${fullBytes.length})보다 큼, 전체 데이터 사용`);
+      webpData = fullBytes;
+    }
+  } else {
+    webpData = fullBytes;
+  }
 
   let bitmap: ImageBitmap | null = null;
 
   try {
-    // 직접 Blob에서 ImageBitmap 생성 시도
-    const blob = new Blob([webpData], { type: 'image/webp' });
-    console.log(`image/webp 형식으로 디코딩 시도 (${webpData.length} bytes)`);
-    console.log('WebP 데이터 샘플 (hex):', Array.from(webpData.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' '));
-    
-    bitmap = await createImageBitmap(blob);
-    console.log(`✅ image/webp 디코딩 성공`);
+    bitmap = await createImageBitmapWithFallback(webpData, format);
+    console.log(`✅ 이미지 디코딩 성공`);
   } catch (primaryError) {
-    console.warn(`image/webp 디코딩 실패, Image 객체로 재시도:`, primaryError);
+    console.warn(`createImageBitmapWithFallback 실패, Image 객체로 재시도:`, primaryError);
     
     try {
       // Image 객체를 사용한 fallback 방식
@@ -65,7 +76,7 @@ export async function renderToCanvas(
       
       // Base64 변환로 시도
       const base64 = btoa(String.fromCharCode(...webpData));
-      const dataUrl = `data:image/webp;base64,${base64}`;
+      const dataUrl = `data:${primaryMime};base64,${base64}`;
       
       console.log('🔄 Image 객체 + Base64 방식으로 재시도...');
       
@@ -317,22 +328,52 @@ function renderUnsupportedFormatCanvas(canvas: HTMLCanvasElement, format: string
 }
 
 /**
- * 이미지 비트맵 생성 with fallback (예비용 함수)
+ * 이미지 비트맵 생성 with AVIF 우선, WebP fallback
  */
 export async function createImageBitmapWithFallback(
   bytes: Uint8Array,
-  format: "aeia" | "aeiw"
+  _format: "aeia" | "aeiw"
 ): Promise<ImageBitmap> {
-  const primaryMime = format === "aeia" ? "image/avif" : "image/webp";
-  const fallbackMime = format === "aeia" ? "image/webp" : "image/avif";
+  // 실제 이미지 데이터 크기 검증 및 추출
+  let imageData = bytes;
+  
+  // WebP의 경우 RIFF 헤더 검증 후 실제 크기만 추출
+  const hasRiff = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46;
+  const hasWebp = hasRiff && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50;
+  
+  if (hasRiff && hasWebp) {
+    const riffSize = (bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24)) + 8;
+    if (riffSize <= bytes.length) {
+      imageData = bytes.slice(0, riffSize);
+      console.log(`WebP 실제 데이터 크기: ${imageData.length} bytes (RIFF: ${riffSize})`);
+    }
+  }
 
+  console.log(`이미지 데이터 샘플 (hex): ${Array.from(imageData.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+
+  let avifError: unknown;
+
+  // 1차 시도: AVIF로 디코딩
   try {
-    const blob = new Blob([bytes.slice()], { type: primaryMime });
-    return await createImageBitmap(blob);
-  } catch (primaryError) {
-    console.warn(`${primaryMime} 디코딩 실패, ${fallbackMime}로 재시도:`, primaryError);
-    
-    const fallbackBlob = new Blob([bytes.slice()], { type: fallbackMime });
-    return await createImageBitmap(fallbackBlob);
+    console.log(`🔄 1차 시도: AVIF 형식으로 디코딩 (${imageData.length} bytes)`);
+    const avifBlob = new Blob([new Uint8Array(imageData)], { type: "image/avif" });
+    const bitmap = await createImageBitmap(avifBlob);
+    console.log(`✅ AVIF 디코딩 성공`);
+    return bitmap;
+  } catch (error) {
+    avifError = error;
+    console.warn(`AVIF 디코딩 실패:`, error);
+  }
+
+  // 2차 시도: WebP로 디코딩
+  try {
+    console.log(`🔄 2차 시도: WebP 형식으로 디코딩 (${imageData.length} bytes)`);
+    const webpBlob = new Blob([new Uint8Array(imageData)], { type: "image/webp" });
+    const bitmap = await createImageBitmap(webpBlob);
+    console.log(`✅ WebP 디코딩 성공`);
+    return bitmap;
+  } catch (webpError) {
+    console.error(`WebP 디코딩도 실패:`, webpError);
+    throw new Error(`AVIF와 WebP 모두 디코딩 실패: AVIF(${avifError}), WebP(${webpError})`);
   }
 }
